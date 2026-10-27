@@ -1,0 +1,20 @@
+{
+  "timezone": "America/Bogota",
+  "repeat_after_min": 15,
+  "escalate_after_min": 30,
+  "medicamentos": [
+    {"nombre": "Omeprazol", "hora": "06:00", "nota": "En ayunas"},
+    {"nombre": "Levotiroxina", "hora": "06:00", "nota": "En ayunas, 30 min antes del desayuno"},
+    {"nombre": "Carvedilol", "hora": "08:00", "nota": "Con el desayuno"},
+    {"nombre": "Telmisartán / Valsartán", "hora": "08:00", "nota": "Con el desayuno"},
+    {"nombre": "Rivaroxabán", "hora": "10:00", "nota": "Con la comida principal"},
+    {"nombre": "Alginato de calcio", "hora": "11:30", "nota": "Protector esofágico"},
+    {"nombre": "Dapagliflozina", "hora": "12:00", "nota": ""},
+    {"nombre": "Espironolactona", "hora": "12:00", "nota": "Con el almuerzo"},
+    {"nombre": "Tamsulosina", "hora": "19:00", "nota": "30 min después de la cena"},
+    {"nombre": "Valsartán", "hora": "19:00", "nota": "Dosis de la noche"},
+    {"nombre": "Carvedilol", "hora": "20:00", "nota": "Segunda dosis"},
+    {"nombre": "Telmisartán / Valsartán", "hora": "20:00", "nota": "Segunda dosis"},
+    {"nombre": "Ezetimiba", "hora": "20:00", "nota": "Con la cena"}
+  ]
+}
