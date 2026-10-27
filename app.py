@@ -213,7 +213,10 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan)
 
-
+@app.get("/")
+async def salud():
+    return {"status": "vivo"}
+  
 @app.get("/webhook")
 async def verificar(request: Request):
     q = request.query_params
