@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 
 # ---------- Configuración ----------
 WA_TOKEN = os.environ["WA_TOKEN"]
@@ -213,10 +214,57 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan)
 
+
+CONTACTO = os.environ.get("CONTACT_EMAIL", "el responsable de este servicio")
+
+
+def pagina(titulo, cuerpo):
+    return HTMLResponse(
+        f"<!doctype html><html lang='es'><head><meta charset='utf-8'>"
+        f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<title>{titulo}</title></head>"
+        f"<body style='font-family:sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem;line-height:1.5'>"
+        f"<h1>{titulo}</h1>{cuerpo}</body></html>"
+    )
+
+
+@app.get("/privacidad")
+async def privacidad():
+    return pagina(
+        "Política de privacidad",
+        "<p>Este servicio es de uso familiar y privado. Envía recordatorios de horarios por WhatsApp "
+        "a un número y avisa a unos pocos familiares autorizados.</p>"
+        "<p>Datos que guarda: los números de teléfono configurados, la lista de horarios y el registro de "
+        "las confirmaciones (fecha, hora y si se confirmó). No vende ni comparte estos datos con terceros; "
+        "solo se procesan a través de WhatsApp (Meta) para enviar y recibir los mensajes.</p>"
+        f"<p>Para consultas o para pedir la eliminación de los datos, escribe a {CONTACTO}.</p>",
+    )
+
+
+@app.get("/terminos")
+async def terminos():
+    return pagina(
+        "Condiciones del servicio",
+        "<p>Servicio de recordatorios de uso familiar y privado. Es solo una ayuda para recordar horarios: "
+        "no reemplaza el consejo, la indicación ni el seguimiento de un profesional de la salud. "
+        "No se garantiza que cada mensaje llegue a tiempo.</p>",
+    )
+
+
+@app.get("/eliminar-datos")
+async def eliminar_datos():
+    return pagina(
+        "Eliminación de datos",
+        "<p>Para eliminar los datos asociados a tu número (teléfono y registro de confirmaciones), "
+        f"escribe a {CONTACTO} indicando tu número. Los datos se borran del servicio.</p>",
+    )
+
+
 @app.get("/")
 async def salud():
     return {"status": "vivo"}
-  
+
+
 @app.get("/webhook")
 async def verificar(request: Request):
     q = request.query_params
