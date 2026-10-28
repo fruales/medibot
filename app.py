@@ -191,37 +191,75 @@ async def disparar(hora):
         log.exception("Excepción enviando recordatorio: dosis_id=%s hora=%s", dosis_id, hora)
 
 
+
 async def revisar_pendientes():
     n = ahora()
-        log.info("DIAGNOSTICO: revisar_pendientes ejecutada; fecha=%s", n.date().isoformat())
+    log.info(
+        "DIAGNOSTICO: revisar_pendientes ejecutada; fecha=%s",
+        n.date().isoformat(),
+    )
+
     with db() as con:
         pend = con.execute(
             "SELECT * FROM dosis WHERE fecha=? AND confirmado IS NULL",
             (n.date().isoformat(),),
         ).fetchall()
-      log.info("DIAGNOSTICO: dosis pendientes encontradas=%s", len(pend))
+
+        log.info(
+            "DIAGNOSTICO: dosis pendientes encontradas=%s",
+            len(pend),
+        )
+
         for d in pend:
             t = n - datetime.fromisoformat(d["enviado"])
+
             if t >= timedelta(minutes=ESCALATE_MIN) and not d["escalado"]:
                 try:
                     ok = await alertar_familia(d["hora"], d["meds"])
                     if ok:
-                        con.execute("UPDATE dosis SET escalado=1 WHERE id=?", (d["id"],))
-                        log.info("Alerta familiar aceptada por Meta: dosis_id=%s", d["id"])
+                        con.execute(
+                            "UPDATE dosis SET escalado=1 WHERE id=?",
+                            (d["id"],),
+                        )
+                        log.info(
+                            "Alerta familiar aceptada por Meta: dosis_id=%s",
+                            d["id"],
+                        )
                     else:
-                        log.error("No se pudo confirmar el envío a todos los familiares: dosis_id=%s", d["id"])
+                        log.error(
+                            "No se pudo confirmar el envío a todos los familiares: dosis_id=%s",
+                            d["id"],
+                        )
                 except Exception:
-                    log.exception("Excepción al alertar a familiares: dosis_id=%s", d["id"])
+                    log.exception(
+                        "Excepción al alertar a familiares: dosis_id=%s",
+                        d["id"],
+                    )
+
             elif t >= timedelta(minutes=REPEAT_MIN) and not d["repetido"]:
                 try:
-                    respuesta = await enviar_recordatorio(d["id"], d["hora"], d["meds"])
+                    respuesta = await enviar_recordatorio(
+                        d["id"], d["hora"], d["meds"]
+                    )
                     if respuesta is not None and respuesta.is_success:
-                        con.execute("UPDATE dosis SET repetido=1 WHERE id=?", (d["id"],))
-                        log.info("Recordatorio repetido aceptado por Meta: dosis_id=%s", d["id"])
+                        con.execute(
+                            "UPDATE dosis SET repetido=1 WHERE id=?",
+                            (d["id"],),
+                        )
+                        log.info(
+                            "Recordatorio repetido aceptado por Meta: dosis_id=%s",
+                            d["id"],
+                        )
                     else:
-                        log.error("Meta no aceptó el recordatorio repetido: dosis_id=%s", d["id"])
+                        log.error(
+                            "Meta no aceptó el recordatorio repetido: dosis_id=%s",
+                            d["id"],
+                        )
                 except Exception:
-                    log.exception("Excepción al repetir recordatorio: dosis_id=%s", d["id"])
+                    log.exception(
+                        "Excepción al repetir recordatorio: dosis_id=%s",
+                        d["id"],
+                    )
 
 
 def resumen_hoy():
