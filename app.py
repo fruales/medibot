@@ -193,6 +193,7 @@ async def disparar(hora):
 
 async def revisar_pendientes():
     n = ahora()
+  log.info("DIAGNOSTICO: revisar_pendientes ejecutada; fecha=%s", n.date().isoformat())
     with db() as con:
         pend = con.execute(
             "SELECT * FROM dosis WHERE fecha=? AND confirmado IS NULL",
