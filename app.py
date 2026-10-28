@@ -10,6 +10,7 @@ Flujo:
 import hashlib
 import hmac
 import json
+import logging
 import os
 import sqlite3
 from contextlib import asynccontextmanager
@@ -18,18 +19,21 @@ from itertools import groupby
 from zoneinfo import ZoneInfo
 
 import httpx
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 # ---------- Configuración ----------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("medibot")
 WA_TOKEN = os.environ["WA_TOKEN"]
 WA_PHONE_ID = os.environ["WA_PHONE_ID"]
 VERIFY_TOKEN = os.environ["VERIFY_TOKEN"]
 APP_SECRET = os.environ["APP_SECRET"]
 PATIENT = os.environ["PATIENT_PHONE"]  # ej. 573001234567 (sin +)
 FAMILY = [p.strip() for p in os.environ["FAMILY_PHONES"].split(",") if p.strip()]
-DB_PATH = os.environ.get("DB_PATH", "medibot.db")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "medibot.db"))
 GRAPH_URL = f"https://graph.facebook.com/v21.0/{WA_PHONE_ID}/messages"
 
 with open(os.path.join(os.path.dirname(__file__), "schedule.json"), encoding="utf-8") as f:
@@ -67,6 +71,9 @@ def db():
 
 
 def init_db():
+    db_dir = os.path.dirname(os.path.abspath(DB_PATH))
+    os.makedirs(db_dir, exist_ok=True)
+    log.info("Inicializando base de datos en: %s", os.path.abspath(DB_PATH))
     with db() as con:
         con.execute(
             """CREATE TABLE IF NOT EXISTS dosis (
@@ -88,19 +95,26 @@ async def wa_post(payload):
             GRAPH_URL, json=payload, headers={"Authorization": f"Bearer {WA_TOKEN}"}
         )
         if r.status_code >= 400:
-            print("Error WhatsApp:", r.status_code, r.text)
+            log.error("WhatsApp rechazó el envío: HTTP %s; respuesta=%s", r.status_code, r.text)
+        else:
+            try:
+                body = r.json()
+                msg_id = (body.get("messages") or [{}])[0].get("id", "sin id de mensaje")
+            except Exception:
+                msg_id = "respuesta sin JSON"
+            log.info("WhatsApp aceptó la solicitud: HTTP %s; mensaje=%s", r.status_code, msg_id)
         return r
 
 
 async def enviar_texto(to, texto):
     # Solo funciona dentro de las 24 h posteriores a un mensaje de esa persona
-    await wa_post(
+    return await wa_post(
         {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": texto}}
     )
 
 
 async def enviar_recordatorio(dosis_id, hora, meds_txt):
-    await wa_post(
+    return await wa_post(
         {
             "messaging_product": "whatsapp",
             "to": PATIENT,
@@ -129,8 +143,9 @@ async def enviar_recordatorio(dosis_id, hora, meds_txt):
 
 
 async def alertar_familia(hora, meds_txt):
+    resultados = []
     for to in FAMILY:
-        await wa_post(
+        respuesta = await wa_post(
             {
                 "messaging_product": "whatsapp",
                 "to": to,
@@ -150,10 +165,13 @@ async def alertar_familia(hora, meds_txt):
                 },
             }
         )
+        resultados.append(respuesta is not None and respuesta.is_success)
+    return bool(resultados) and all(resultados)
 
 
 # ---------- Tareas programadas ----------
 async def disparar(hora):
+    log.info("TAREA EJECUTADA: recordatorio programado para %s; hora Colombia actual=%s", hora, ahora().isoformat())
     meds_txt = lista_texto(GRUPOS[hora])
     n = ahora()
     with db() as con:
@@ -162,7 +180,15 @@ async def disparar(hora):
             (n.date().isoformat(), hora, meds_txt, n.isoformat()),
         )
         dosis_id = cur.lastrowid
-    await enviar_recordatorio(dosis_id, hora, meds_txt)
+    log.info("Dosis registrada en base de datos: id=%s hora=%s", dosis_id, hora)
+    try:
+        respuesta = await enviar_recordatorio(dosis_id, hora, meds_txt)
+        if respuesta is not None and respuesta.is_success:
+            log.info("Recordatorio enviado/aceptado por Meta: dosis_id=%s hora=%s", dosis_id, hora)
+        else:
+            log.error("Recordatorio NO aceptado por Meta: dosis_id=%s hora=%s", dosis_id, hora)
+    except Exception:
+        log.exception("Excepción enviando recordatorio: dosis_id=%s hora=%s", dosis_id, hora)
 
 
 async def revisar_pendientes():
@@ -175,11 +201,25 @@ async def revisar_pendientes():
         for d in pend:
             t = n - datetime.fromisoformat(d["enviado"])
             if t >= timedelta(minutes=ESCALATE_MIN) and not d["escalado"]:
-                con.execute("UPDATE dosis SET escalado=1 WHERE id=?", (d["id"],))
-                await alertar_familia(d["hora"], d["meds"])
+                try:
+                    ok = await alertar_familia(d["hora"], d["meds"])
+                    if ok:
+                        con.execute("UPDATE dosis SET escalado=1 WHERE id=?", (d["id"],))
+                        log.info("Alerta familiar aceptada por Meta: dosis_id=%s", d["id"])
+                    else:
+                        log.error("No se pudo confirmar el envío a todos los familiares: dosis_id=%s", d["id"])
+                except Exception:
+                    log.exception("Excepción al alertar a familiares: dosis_id=%s", d["id"])
             elif t >= timedelta(minutes=REPEAT_MIN) and not d["repetido"]:
-                con.execute("UPDATE dosis SET repetido=1 WHERE id=?", (d["id"],))
-                await enviar_recordatorio(d["id"], d["hora"], d["meds"])
+                try:
+                    respuesta = await enviar_recordatorio(d["id"], d["hora"], d["meds"])
+                    if respuesta is not None and respuesta.is_success:
+                        con.execute("UPDATE dosis SET repetido=1 WHERE id=?", (d["id"],))
+                        log.info("Recordatorio repetido aceptado por Meta: dosis_id=%s", d["id"])
+                    else:
+                        log.error("Meta no aceptó el recordatorio repetido: dosis_id=%s", d["id"])
+                except Exception:
+                    log.exception("Excepción al repetir recordatorio: dosis_id=%s", d["id"])
 
 
 def resumen_hoy():
@@ -199,16 +239,39 @@ def resumen_hoy():
 # ---------- App ----------
 scheduler = AsyncIOScheduler(timezone=TZ)
 
+def registrar_evento_scheduler(event):
+    if event.code == EVENT_JOB_MISSED:
+        log.error("TAREA OMITIDA por retraso: job_id=%s hora_programada=%s", event.job_id, event.scheduled_run_time)
+    elif event.code == EVENT_JOB_ERROR:
+        log.error("ERROR en tarea programada: job_id=%s excepción=%s", event.job_id, event.exception)
+    elif event.code == EVENT_JOB_EXECUTED:
+        log.info("Tarea finalizada: job_id=%s", event.job_id)
+
 
 @asynccontextmanager
 async def lifespan(app):
     init_db()
+    scheduler.add_listener(
+        registrar_evento_scheduler,
+        EVENT_JOB_MISSED | EVENT_JOB_ERROR | EVENT_JOB_EXECUTED,
+    )
     for hora in GRUPOS:
         h, m = map(int, hora.split(":"))
-        scheduler.add_job(disparar, "cron", hour=h, minute=m, args=[hora], misfire_grace_time=300)
-    scheduler.add_job(revisar_pendientes, "interval", minutes=1)
+        scheduler.add_job(
+            disparar, "cron", hour=h, minute=m, args=[hora],
+            id=f"recordatorio_{hora.replace(':', '')}",
+            misfire_grace_time=300, coalesce=True, max_instances=1, replace_existing=True,
+        )
+    scheduler.add_job(
+        revisar_pendientes, "interval", minutes=1, id="revisar_pendientes",
+        coalesce=True, max_instances=1, replace_existing=True,
+    )
     scheduler.start()
+    log.info("MEDIBOT INICIADO. Zona horaria=%s; hora actual=%s", TZ, ahora().isoformat())
+    for job in scheduler.get_jobs():
+        log.info("TAREA PROGRAMADA: id=%s próxima_ejecución=%s", job.id, job.next_run_time)
     yield
+    log.info("Cerrando programador de MediBot")
     scheduler.shutdown()
 
 
