@@ -199,6 +199,7 @@ async def revisar_pendientes():
             "SELECT * FROM dosis WHERE fecha=? AND confirmado IS NULL",
             (n.date().isoformat(),),
         ).fetchall()
+      log.info("DIAGNOSTICO: dosis pendientes encontradas=%s", len(pend))
         for d in pend:
             t = n - datetime.fromisoformat(d["enviado"])
             if t >= timedelta(minutes=ESCALATE_MIN) and not d["escalado"]:
